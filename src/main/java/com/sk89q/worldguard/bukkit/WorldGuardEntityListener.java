@@ -20,28 +20,14 @@ package com.sk89q.worldguard.bukkit;
 
 import static com.sk89q.worldguard.bukkit.BukkitUtil.toVector;
 
+import java.util.HashSet;
 import java.util.Set;
 
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.Block;
-import org.bukkit.entity.Creeper;
-import org.bukkit.entity.EnderDragon;
-import org.bukkit.entity.EnderPearl;
-import org.bukkit.entity.Enderman;
-import org.bukkit.entity.Entity;
-import org.bukkit.entity.EntityType;
-import org.bukkit.entity.Fireball;
-import org.bukkit.entity.LivingEntity;
-import org.bukkit.entity.Player;
-import org.bukkit.entity.Projectile;
-import org.bukkit.entity.TNTPrimed;
-import org.bukkit.entity.Tameable;
-import org.bukkit.entity.ThrownPotion;
-import org.bukkit.entity.Wither;
-import org.bukkit.entity.WitherSkull;
-import org.bukkit.entity.Wolf;
+import org.bukkit.entity.*;
 import org.bukkit.entity.minecart.ExplosiveMinecart;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -200,7 +186,7 @@ public class WorldGuardEntityListener implements Listener {
             // handled anywhere else
             if (type == DamageCause.BLOCK_EXPLOSION
                     && (wcfg.blockOtherExplosions
-                            || !plugin.getGlobalRegionManager().allows(DefaultFlag.OTHER_EXPLOSION, defender.getLocation()))) {
+                    || !plugin.getGlobalRegionManager().allows(DefaultFlag.OTHER_EXPLOSION, defender.getLocation()))) {
                 event.setCancelled(true);
                 return;
             }
@@ -219,6 +205,7 @@ public class WorldGuardEntityListener implements Listener {
 
         if (attacker instanceof Player) {
             Player player = (Player) attacker;
+            LocalPlayer localPlayer = plugin.wrapPlayer(player);
 
             ConfigurationManager cfg = plugin.getGlobalStateManager();
             WorldConfiguration wcfg = cfg.get(player.getWorld());
@@ -230,6 +217,28 @@ public class WorldGuardEntityListener implements Listener {
                     if (!wcfg.getBlacklist().check(
                             new ItemUseBlacklistEvent(plugin.wrapPlayer(player),
                                     toVector(player.getLocation()), held.getTypeId()), false, false)) {
+                        event.setCancelled(true);
+                        return;
+                    }
+                }
+            }
+
+            if (defender instanceof Creature) {
+                if (wcfg.useRegions) {
+                    Vector pt = toVector(defender.getLocation());
+                    Vector pt2 = toVector(attacker.getLocation());
+                    RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
+
+                    // Accumulate all entities that aren't allowed to be attacked here
+                    Set<EntityType> entityTypes = new HashSet<EntityType>();
+                    Set<EntityType> es = mgr.getApplicableRegions(pt).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+                    Set<EntityType> es2 = mgr.getApplicableRegions(pt2).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+
+                    if (es != null) entityTypes.addAll(es);
+                    if (es2 != null) entityTypes.addAll(es2);
+
+                    if (entityTypes.contains(defender.getType())) {
+                        player.sendMessage(ChatColor.DARK_RED + "You may not attack that mob here.");
                         event.setCancelled(true);
                         return;
                     }
@@ -269,120 +278,131 @@ public class WorldGuardEntityListener implements Listener {
                 }
             }
 
-            if (attacker != null) {
-                if (attacker instanceof Player) {
-                    if (wcfg.useRegions) {
-                        Vector pt = toVector(defender.getLocation());
-                        Vector pt2 = toVector(attacker.getLocation());
-                        RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
 
-                        if (!mgr.getApplicableRegions(pt2).allows(DefaultFlag.PVP, plugin.wrapPlayer((Player) attacker))) {
-                            tryCancelPVPEvent((Player) attacker, player, event, true);
-                        } else if (!mgr.getApplicableRegions(pt).allows(DefaultFlag.PVP ,localPlayer)) {
-                            tryCancelPVPEvent((Player) attacker, player, event, false);
-                        }
+            if (wcfg.useRegions) {
+                Vector pt = toVector(defender.getLocation());
+                Vector pt2 = toVector(attacker.getLocation());
+                RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
+
+                if (attacker instanceof Player) {
+                    if (!mgr.getApplicableRegions(pt2).allows(DefaultFlag.PVP, plugin.wrapPlayer((Player) attacker))) {
+                        tryCancelPVPEvent((Player) attacker, player, event, true);
+                    } else if (!mgr.getApplicableRegions(pt).allows(DefaultFlag.PVP ,localPlayer)) {
+                        tryCancelPVPEvent((Player) attacker, player, event, false);
                     }
                 }
 
-                if (attacker instanceof TNTPrimed || attacker instanceof ExplosiveMinecart) {
+                // Accumulate all entities that aren't allowed to be attacked here
+                Set<EntityType> entityTypes = new HashSet<EntityType>();
+                Set<EntityType> es = mgr.getApplicableRegions(pt).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+                Set<EntityType> es2 = mgr.getApplicableRegions(pt2).getFlag(DefaultFlag.DENY_PVM, localPlayer);
 
-                    // The check for explosion damage should be handled already... But... What ever...
-                    if (wcfg.blockTNTExplosions) {
+                if (es != null) entityTypes.addAll(es);
+                if (es2 != null) entityTypes.addAll(es2);
+
+                if (entityTypes.contains(attacker.getType())) {
+                    event.setCancelled(true);
+                    return;
+                }
+            }
+
+            if (attacker instanceof TNTPrimed || attacker instanceof ExplosiveMinecart) {
+
+                // The check for explosion damage should be handled already... But... What ever...
+                if (wcfg.blockTNTExplosions) {
+                    event.setCancelled(true);
+                    return;
+                }
+                if (wcfg.useRegions && wcfg.explosionFlagCancellation) {
+                    Vector pt = toVector(defender.getLocation());
+                    RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
+                    ApplicableRegionSet set = mgr.getApplicableRegions(pt);
+                    if (!set.allows(DefaultFlag.TNT, localPlayer)) {
                         event.setCancelled(true);
                         return;
                     }
-                    if (wcfg.useRegions && wcfg.explosionFlagCancellation) {
-                        Vector pt = toVector(defender.getLocation());
-                        RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
-                        ApplicableRegionSet set = mgr.getApplicableRegions(pt);
-                        if (!set.allows(DefaultFlag.TNT, localPlayer)) {
-                            event.setCancelled(true);
-                            return;
-                        }
+                }
+            }
+
+            if (attacker instanceof Fireball) {
+                if (attacker instanceof WitherSkull) {
+                    if (wcfg.blockWitherSkullExplosions) {
+                        event.setCancelled(true);
+                        return;
+                    }
+                } else {
+                    if (wcfg.blockFireballExplosions) {
+                        event.setCancelled(true);
+                        return;
                     }
                 }
-
-                if (attacker instanceof Fireball) {
-                    if (attacker instanceof WitherSkull) {
-                        if (wcfg.blockWitherSkullExplosions) {
-                            event.setCancelled(true);
-                            return;
+                if (wcfg.useRegions) {
+                    Fireball fireball = (Fireball) attacker;
+                    Vector pt = toVector(defender.getLocation());
+                    RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
+                    ApplicableRegionSet set = mgr.getApplicableRegions(pt);
+                    if (fireball.getShooter() instanceof Player) {
+                        Vector pt2 = toVector(fireball.getShooter().getLocation());
+                        if (!mgr.getApplicableRegions(pt2).allows(DefaultFlag.PVP, plugin.wrapPlayer((Player) fireball.getShooter()))) {
+                            tryCancelPVPEvent((Player) fireball.getShooter(), player, event, true);
+                        } else if (!set.allows(DefaultFlag.PVP, localPlayer)) {
+                            tryCancelPVPEvent((Player) fireball.getShooter(), player, event, false);
                         }
                     } else {
-                        if (wcfg.blockFireballExplosions) {
+                        if (!set.allows(DefaultFlag.GHAST_FIREBALL, localPlayer) && wcfg.explosionFlagCancellation) {
                             event.setCancelled(true);
                             return;
                         }
                     }
-                    if (wcfg.useRegions) {
-                        Fireball fireball = (Fireball) attacker;
-                        Vector pt = toVector(defender.getLocation());
-                        RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
-                        ApplicableRegionSet set = mgr.getApplicableRegions(pt);
-                        if (fireball.getShooter() instanceof Player) {
-                            Vector pt2 = toVector(fireball.getShooter().getLocation());
-                            if (!mgr.getApplicableRegions(pt2).allows(DefaultFlag.PVP, plugin.wrapPlayer((Player) fireball.getShooter()))) {
-                                tryCancelPVPEvent((Player) fireball.getShooter(), player, event, true);
-                            } else if (!set.allows(DefaultFlag.PVP, localPlayer)) {
-                                tryCancelPVPEvent((Player) fireball.getShooter(), player, event, false);
-                            }
-                        } else {
-                            if (!set.allows(DefaultFlag.GHAST_FIREBALL, localPlayer) && wcfg.explosionFlagCancellation) {
-                                event.setCancelled(true);
-                                return;
-                            }
-                        }
 
-                    }
+                }
+            }
+
+            if (attacker instanceof LivingEntity && !(attacker instanceof Player)) {
+                if (attacker instanceof Creeper && wcfg.blockCreeperExplosions) {
+                    event.setCancelled(true);
+                    return;
                 }
 
-                if (attacker instanceof LivingEntity && !(attacker instanceof Player)) {
-                    if (attacker instanceof Creeper && wcfg.blockCreeperExplosions) {
+                if (wcfg.disableMobDamage) {
+                    event.setCancelled(true);
+                    return;
+                }
+
+                if (wcfg.useRegions) {
+                    Vector pt = toVector(defender.getLocation());
+                    RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
+                    ApplicableRegionSet set = mgr.getApplicableRegions(pt);
+
+                    if (!set.allows(DefaultFlag.MOB_DAMAGE, localPlayer) && !(attacker instanceof Tameable)) {
                         event.setCancelled(true);
                         return;
                     }
 
-                    if (wcfg.disableMobDamage) {
-                        event.setCancelled(true);
-                        return;
-                    }
-
-                    if (wcfg.useRegions) {
-                        Vector pt = toVector(defender.getLocation());
-                        RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
-                        ApplicableRegionSet set = mgr.getApplicableRegions(pt);
-
-                        if (!set.allows(DefaultFlag.MOB_DAMAGE, localPlayer) && !(attacker instanceof Tameable)) {
+                    if (attacker instanceof Creeper) {
+                        if (!set.allows(DefaultFlag.CREEPER_EXPLOSION, localPlayer) && wcfg.explosionFlagCancellation) {
                             event.setCancelled(true);
                             return;
                         }
-
-                        if (attacker instanceof Creeper) {
-                            if (!set.allows(DefaultFlag.CREEPER_EXPLOSION, localPlayer) && wcfg.explosionFlagCancellation) {
+                    }
+                    if (attacker instanceof Tameable) {
+                        if (((Tameable) attacker).getOwner() == null) {
+                            if (!set.allows(DefaultFlag.MOB_DAMAGE, localPlayer)) {
                                 event.setCancelled(true);
                                 return;
                             }
                         }
-                        if (attacker instanceof Tameable) {
-                            if (((Tameable) attacker).getOwner() == null) {
-                                if (!set.allows(DefaultFlag.MOB_DAMAGE, localPlayer)) {
-                                    event.setCancelled(true);
-                                    return;
-                                }
-                            }
-                            if (!(((Tameable) attacker).getOwner() instanceof Player)) {
-                                return;
-                            }
-                            Player beastMaster = (Player) ((Tameable) attacker).getOwner();
-                            Vector pt2 = toVector(attacker.getLocation());
-                            if (!mgr.getApplicableRegions(pt2).allows(DefaultFlag.PVP, plugin.wrapPlayer(beastMaster))) {
-                                tryCancelPVPEvent(beastMaster, player, event, true);
-                            } else if (!set.allows(DefaultFlag.PVP, localPlayer)) {
-                                tryCancelPVPEvent(beastMaster, player, event, false);
-                            }
+                        if (!(((Tameable) attacker).getOwner() instanceof Player)) {
+                            return;
+                        }
+                        Player beastMaster = (Player) ((Tameable) attacker).getOwner();
+                        Vector pt2 = toVector(attacker.getLocation());
+                        if (!mgr.getApplicableRegions(pt2).allows(DefaultFlag.PVP, plugin.wrapPlayer(beastMaster))) {
+                            tryCancelPVPEvent(beastMaster, player, event, true);
+                        } else if (!set.allows(DefaultFlag.PVP, localPlayer)) {
+                            tryCancelPVPEvent(beastMaster, player, event, false);
                         }
                     }
-
                 }
             }
         }
@@ -391,6 +411,37 @@ public class WorldGuardEntityListener implements Listener {
     private void onEntityDamageByProjectile(EntityDamageByEntityEvent event) {
         Entity defender = event.getEntity();
         Entity attacker = ((Projectile) event.getDamager()).getShooter();
+
+        if (attacker != null && attacker instanceof Player) {
+
+            Player player = (Player) attacker;
+            LocalPlayer localPlayer = plugin.wrapPlayer(player);
+
+            ConfigurationManager cfg = plugin.getGlobalStateManager();
+            WorldConfiguration wcfg = cfg.get(player.getWorld());
+
+            if (defender instanceof Creature) {
+                if (wcfg.useRegions) {
+                    Vector pt = toVector(defender.getLocation());
+                    Vector pt2 = toVector(attacker.getLocation());
+                    RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
+
+                    // Accumulate all entities that aren't allowed to be attacked here
+                    Set<EntityType> entityTypes = new HashSet<EntityType>();
+                    Set<EntityType> es = mgr.getApplicableRegions(pt).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+                    Set<EntityType> es2 = mgr.getApplicableRegions(pt2).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+
+                    if (es != null) entityTypes.addAll(es);
+                    if (es2 != null) entityTypes.addAll(es2);
+
+                    if (entityTypes.contains(defender.getType())) {
+                        player.sendMessage(ChatColor.DARK_RED + "You may not attack that mob here.");
+                        event.setCancelled(true);
+                        return;
+                    }
+                }
+            }
+        }
 
         if (defender instanceof Player) {
             Player player = (Player) defender;
@@ -413,9 +464,23 @@ public class WorldGuardEntityListener implements Listener {
                 }
                 if (wcfg.useRegions) {
                     Vector pt = toVector(defender.getLocation());
+                    Vector pt2 = toVector(attacker.getLocation());
                     RegionManager mgr = plugin.getGlobalRegionManager().get(player.getWorld());
 
                     if (!mgr.getApplicableRegions(pt).allows(DefaultFlag.MOB_DAMAGE, localPlayer)) {
+                        event.setCancelled(true);
+                        return;
+                    }
+
+                    // Accumulate all entities that aren't allowed to be attacked here
+                    Set<EntityType> entityTypes = new HashSet<EntityType>();
+                    Set<EntityType> es = mgr.getApplicableRegions(pt).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+                    Set<EntityType> es2 = mgr.getApplicableRegions(pt2).getFlag(DefaultFlag.DENY_PVM, localPlayer);
+
+                    if (es != null) entityTypes.addAll(es);
+                    if (es2 != null) entityTypes.addAll(es2);
+
+                    if (entityTypes.contains(attacker.getType())) {
                         event.setCancelled(true);
                         return;
                     }
@@ -526,7 +591,7 @@ public class WorldGuardEntityListener implements Listener {
                 return;
             }
 
-           if (wcfg.teleportOnSuffocation && type == DamageCause.SUFFOCATION) {
+            if (wcfg.teleportOnSuffocation && type == DamageCause.SUFFOCATION) {
                 BukkitUtil.findFreePosition(player);
                 event.setCancelled(true);
                 return;
